@@ -275,7 +275,95 @@ function keepCursorThemesAlive() {
   }
 }
 
+// --------------------------------------------------------------------------
+// Give dragged files a text/uri-list
+//
+// A drag carrying files offers text/uri-list, but Chromium 108's
+// WaylandExchangeDataProvider::ExtractData() has no branch for it. The
+// request falls through to the plain-text branch, whose GetString() refuses
+// to return text whenever the drag holds files, so the drop target reads
+// 0 bytes. File managers such as Nautilus then fall back to text/plain or
+// text/x-moz-url and save the URI as a .txt file.
+//
+// Point that one GetString() call at a copy of GetString() that skips the
+// "holds files" check. The renderer puts the URI list in the drag's
+// text/plain, so a text/uri-list request returns it. Only ExtractData()
+// (the drag source answering the drop target) changes: drops into Eagle
+// still never see the text.
+//
+// This writes to read-only code through /proc/self/mem, which kernels
+// built with CONFIG_PROC_MEM_NO_FORCE (or FORCE_PTRACE) refuse; the drag
+// then keeps its text/x-moz-url fallback. Only the official Electron
+// 22.3.7 x64 build is touched, after checking every byte involved.
+// --------------------------------------------------------------------------
+
+const ELECTRON_22_3_7_URI_LIST = {
+  // call ui::OSExchangeDataProviderNonBacked::GetString() in
+  // ui::WaylandExchangeDataProvider::ExtractData()
+  call: 0x2ce93a8,
+  getString: 0x6459050,
+  // GetString()'s prologue: push %rbp; mov %rsp,%rbp; push %r15; push %r14;
+  // push %rbx; push %rax; mov %rsi,%r15; mov %rdi,%r14
+  prologue: '554889e54157415653504989f74989fe',
+  // The instruction after its `if (HasFile()) return false;`
+  afterHasFileCheck: 0x6459069,
+  // int3 padding up to the next page after BoringSSL's assembly
+  cave: 0x1ec24c0,
+  caveSize: 0x1ec3000 - 0x1ec24c0
+};
+
+function rel32(from, to) {
+  const buf = Buffer.alloc(4);
+  buf.writeInt32LE(to - from);
+  return buf;
+}
+
+function exportFileUriList() {
+  if (process.arch !== 'x64' || process.versions.electron !== '22.3.7') {
+    return 'unsupported Electron build';
+  }
+  const base = executableBase();
+  if (base === null) return 'executable mapping not found';
+
+  const { call, getString, prologue, afterHasFileCheck, cave, caveSize } =
+    ELECTRON_22_3_7_URI_LIST;
+  const stub = Buffer.concat([
+    Buffer.from(prologue, 'hex'),
+    Buffer.from([0xe9]),
+    rel32(cave + prologue.length / 2 + 5, afterHasFileCheck)
+  ]);
+  const patchedCall = Buffer.concat([Buffer.from([0xe8]), rel32(call + 5, cave)]);
+  const originalCall = Buffer.concat([Buffer.from([0xe8]), rel32(call + 5, getString)]);
+
+  const fd = fs.openSync('/proc/self/mem', 'r+');
+  const read = (addr, length) => {
+    const buf = Buffer.alloc(length);
+    fs.readSync(fd, buf, 0, length, base + addr);
+    return buf;
+  };
+  try {
+    const currentCall = read(call, 5);
+    if (currentCall.equals(patchedCall) && read(cave, stub.length).equals(stub)) return null;
+    if (!currentCall.equals(originalCall)) return 'unexpected ExtractData() code';
+    if (read(getString, prologue.length / 2).toString('hex') !== prologue) {
+      return 'unexpected GetString() code';
+    }
+    if (!read(cave, caveSize).every(b => b === 0xcc)) return 'code cave is not padding';
+
+    // Stub first, then the call that jumps to it.
+    fs.writeSync(fd, stub, 0, stub.length, base + cave);
+    fs.writeSync(fd, patchedCall, 0, patchedCall.length, base + call);
+    if (!read(call, 5).equals(patchedCall)) return 'write did not stick';
+    return null;
+  } catch (err) {
+    return `kernel refused the write (${err.code || err.message})`;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 const usingWayland = isMainProcess && isWaylandSession();
+let fileUriListExported = false;
 
 if (usingWayland) {
   // Renderers inherit the environment and use it to pick the drag path.
@@ -287,6 +375,13 @@ if (usingWayland) {
     console.error('[STUBS WAYLAND] Cursor theme free patch failed:', err);
   }
   try {
+    const skipped = exportFileUriList();
+    fileUriListExported = !skipped;
+    console.log('[STUBS WAYLAND] text/uri-list drag patch:', skipped ? `skipped (${skipped})` : 'applied');
+  } catch (err) {
+    console.error('[STUBS WAYLAND] text/uri-list drag patch failed:', err);
+  }
+  try {
     installStaticCursors();
   } catch (err) {
     console.error('[STUBS WAYLAND] Could not install static cursors:', err);
@@ -295,6 +390,7 @@ if (usingWayland) {
 
 module.exports = {
   usingWayland,
+  fileUriListExported: () => fileUriListExported,
   isWaylandSession,
   staticXcursor
 };

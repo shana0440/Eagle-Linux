@@ -36,7 +36,7 @@ const nativeModules = require('./native-modules');
 // 8. UI & Window management
 const windowManager = require('./window-manager');
 
-// 9. Native Wayland: static cursors (Chromium 108 cursor crash workaround)
+// 9. Native Wayland: static cursors (Chromium 108 cursor crash workaround), text/uri-list for drags
 const wayland = require('./wayland');
 
 // 10. Drag-out: normalise startDrag(); HTML5 drag-out on Wayland
