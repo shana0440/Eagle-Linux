@@ -42,10 +42,13 @@ const wayland = require('./wayland');
 // 10. Drag-out: normalise startDrag(); HTML5 drag-out on Wayland
 const dragOut = require('./drag-out');
 
-// 11. Renderer-only fixes (no-op in the main process)
+// 11. Hyprland: move Eagle's notification popup to the corner Eagle asks for
+const hyprland = require('./hyprland');
+
+// 12. Renderer-only fixes (no-op in the main process)
 const rendererFixes = require('./renderer-fixes');
 
-// 12. Dynamically-installed plugin patches & desktop integration
+// 13. Dynamically-installed plugin patches & desktop integration
 const aiSearch = require('./ai-search');
 const kdeShortcuts = require('./kde-shortcuts');
 

@@ -13,6 +13,7 @@
  *  - patches/window-manager.js     : BrowserWindow wrapper, window controls, app lifecycle
  *  - patches/wayland.js            : Wayland detection, static cursor themes (cursor crash), text/uri-list for drags, bare configure size
  *  - patches/drag-out.js           : startDrag() normalisation; HTML5 drag-out on Wayland
+ *  - patches/hyprland.js           : Hyprland: notification popup position
  *  - patches/autostart.js          : Shared XDG autostart .desktop helpers
  *  - patches/renderer-fixes.js     : Renderer-only window.ig & body display fixes
  *  - patches/ai-search.js          : AI Search plugin Linux compatibility

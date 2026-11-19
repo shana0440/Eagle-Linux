@@ -215,6 +215,8 @@ Running natively on Wayland also needs two workarounds for Chromium 108 cursor b
 
 Another startup patch keeps Eagle at its size when the compositor ends a configure sequence without a size, as Hyprland does when you switch back to Eagle's workspace. Without it Chromium 108 shrinks the window to its minimum size, drawn in the corner of its tile.
 
+Wayland apps cannot place their own windows, so compositors open Eagle's notifications ("Download complete", ...) wherever they choose. On Hyprland, Eagle moves them to the bottom-right corner through Hyprland's IPC socket. The popup's window title is `Eagle Notification`, for your own window rules.
+
 ---
 
 ## 📚 Project Documentation
