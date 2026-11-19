@@ -1,5 +1,5 @@
 // ==========================================================================
-// Hyprland: put Eagle's notification where Eagle asks
+// Hyprland: position Eagle's notification without compositor decorations
 //
 // Eagle shows its notifications ("Download complete", ...) in progress.html,
 // a popup it moves to the bottom-right corner with setPosition() before each
@@ -50,8 +50,27 @@ async function moveNotification(socket, { x, y }) {
   const window = `address:${notification.address}`;
   // Hyprland reads dispatches as Lua with a Lua config, else as hyprlang.
   const reply = await hyprctl(socket, `dispatch hl.dsp.window.move({ x = ${x}, y = ${y}, window = '${window}' })`);
-  if (reply.trim() !== 'ok') {
-    await hyprctl(socket, `dispatch movewindowpixel exact ${x} ${y},${window}`);
+  if (reply.trim() === 'ok') {
+    await hyprctl(socket, '[[BATCH]]' + [
+      ['border_size', 0], ['no_blur', 1], ['no_shadow', 1], ['no_glow', 1]
+    ].map(([prop, value]) =>
+      `dispatch hl.dsp.window.set_prop({ window = '${window}', prop = '${prop}', value = '${value}' })`
+    ).join(';'));
+    return;
+  }
+
+  const legacyReply = await hyprctl(socket, '[[BATCH]]' + [
+    `dispatch movewindowpixel exact ${x} ${y},${window}`,
+    `dispatch setprop ${window} border_size 0`,
+    `dispatch setprop ${window} no_blur 1`,
+    `dispatch setprop ${window} no_shadow 1`
+  ].join(';'));
+  if (/prop not found/i.test(legacyReply)) {
+    await hyprctl(socket, '[[BATCH]]' + [
+      `dispatch setprop ${window} bordersize 0`,
+      `dispatch setprop ${window} noblur 1`,
+      `dispatch setprop ${window} noshadow 1`
+    ].join(';'));
   }
 }
 
