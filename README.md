@@ -213,6 +213,8 @@ Electron 22, which Eagle's compiled code is tied to, limits where items can be d
 
 Running natively on Wayland also needs two workarounds for Chromium 108 cursor bugs, applied automatically at startup: single-frame copies of your cursor theme (in `~/.cache/eagle-linux/static-cursors`) and keeping replaced cursor themes in memory. Without them Eagle segfaults in `WaylandCursor::SetPlatformShapeInternal()`, especially with animated cursor themes or monitors at different scales.
 
+Another startup patch keeps Eagle at its size when the compositor ends a configure sequence without a size, as Hyprland does when you switch back to Eagle's workspace. Without it Chromium 108 shrinks the window to its minimum size, drawn in the corner of its tile.
+
 ---
 
 ## 📚 Project Documentation

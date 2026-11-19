@@ -362,6 +362,54 @@ function exportFileUriList() {
   }
 }
 
+// --------------------------------------------------------------------------
+// Keep the window size on a bare xdg_surface.configure
+//
+// Hyprland ends a configure sequence with only xdg_surface.configure, without
+// xdg_toplevel.configure, e.g. when the window's workspace is shown again.
+// The spec allows that, but Chromium 108 then takes the empty pending bounds
+// as the new size: WaylandWindow::ProcessPendingBoundsDip() resizes the window
+// to its minimum size (Eagle's 500x375), drawn in the corner of its tile.
+//
+// ProcessPendingBoundsDip() already answers empty pending bounds by acking
+// with the current bounds, but only for minimized windows. Drop the
+// "minimized" condition (jne -> nop) so every window does.
+//
+// Same requirements as above: the official Electron 22.3.7 x64 build, a
+// kernel that allows the /proc/self/mem write, and the expected bytes.
+// --------------------------------------------------------------------------
+
+const ELECTRON_22_3_7_BARE_CONFIGURE = {
+  // cmp $0x2,%eax (PlatformWindowState::kMinimized); jne <normal path>
+  minimizedCheck: 0x2d00bd5,
+  original: '83f8027514',
+  patched: '83f8029090'
+};
+
+function keepSizeOnBareConfigure() {
+  if (process.arch !== 'x64' || process.versions.electron !== '22.3.7') {
+    return 'unsupported Electron build';
+  }
+  const base = executableBase();
+  if (base === null) return 'executable mapping not found';
+
+  const { minimizedCheck, original, patched } = ELECTRON_22_3_7_BARE_CONFIGURE;
+  const fd = fs.openSync('/proc/self/mem', 'r+');
+  try {
+    const code = Buffer.alloc(original.length / 2);
+    fs.readSync(fd, code, 0, code.length, base + minimizedCheck);
+    if (code.toString('hex') === patched) return null;
+    if (code.toString('hex') !== original) return 'unexpected ProcessPendingBoundsDip() code';
+    const replacement = Buffer.from(patched, 'hex');
+    fs.writeSync(fd, replacement, 0, replacement.length, base + minimizedCheck);
+    return null;
+  } catch (err) {
+    return `kernel refused the write (${err.code || err.message})`;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 const usingWayland = isMainProcess && isWaylandSession();
 let fileUriListExported = false;
 
@@ -380,6 +428,12 @@ if (usingWayland) {
     console.log('[STUBS WAYLAND] text/uri-list drag patch:', skipped ? `skipped (${skipped})` : 'applied');
   } catch (err) {
     console.error('[STUBS WAYLAND] text/uri-list drag patch failed:', err);
+  }
+  try {
+    const skipped = keepSizeOnBareConfigure();
+    console.log('[STUBS WAYLAND] Bare configure size patch:', skipped ? `skipped (${skipped})` : 'applied');
+  } catch (err) {
+    console.error('[STUBS WAYLAND] Bare configure size patch failed:', err);
   }
   try {
     installStaticCursors();
