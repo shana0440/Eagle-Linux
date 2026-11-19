@@ -102,7 +102,8 @@ if (isMainProcess && electron) {
           if (win.isDestroyed() || !win.webContents) return;
           const globalCssCode = `
           (function() {
-            if (!document.getElementById('eagle-global-style-fix')) {
+            const isNotification = location.protocol === 'file:' && location.pathname.endsWith('/progress.html');
+            if (!isNotification && !document.getElementById('eagle-global-style-fix')) {
               const style = document.createElement('style');
               style.id = 'eagle-global-style-fix';
               style.innerHTML = \`
