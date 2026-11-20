@@ -194,18 +194,17 @@ environment.systemPackages = [
 
 [`mcp/eagle-mcp.ts`](mcp/eagle-mcp.ts) is a [Model Context Protocol](https://modelcontextprotocol.io) server that lets AI clients such as Claude Desktop, Claude Code or Cursor search, tag, import and organize items in your library. It talks to the local API Eagle serves on `http://localhost:41595` while it is running, needs Node.js 22.18 or newer, and has no dependencies.
 
-Add it to your client's MCP configuration:
+The Nix package installs it as `eagle-mcp`. Add it to your client's MCP configuration:
 
 ```json
 {
   "mcpServers": {
-    "eagle": {
-      "command": "node",
-      "args": ["/path/to/Eagle-Linux/mcp/eagle-mcp.ts"]
-    }
+    "eagle": { "command": "eagle-mcp" }
   }
 }
 ```
+
+With other packages, run it from a checkout of this repository instead: `"command": "node", "args": ["/path/to/Eagle-Linux/mcp/eagle-mcp.ts"]`.
 
 If Eagle fell back to another port because `41595` was taken, set `"env": { "EAGLE_API_URL": "http://localhost:41597" }`.
 

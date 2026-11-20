@@ -341,6 +341,10 @@ EOF
       mkdir -p "$out/share/eagle/electron"
       ln -sf ${electron22}/libexec/electron/electron "$out/share/eagle/electron/electron"
 
+      install -Dm644 ./mcp/eagle-mcp.ts "$out/share/eagle/mcp/eagle-mcp.ts"
+      makeWrapper ${pkgs.nodejs}/bin/node "$out/bin/eagle-mcp" \
+        --add-flags "$out/share/eagle/mcp/eagle-mcp.ts"
+
       makeWrapper ${electron22}/bin/electron "$out/bin/eagle" \
         --add-flags "-r $out/share/eagle/patch.js $out/share/eagle/app --no-sandbox --ozone-platform-hint=auto" \
         --set GTK_USE_PORTAL "1" \
