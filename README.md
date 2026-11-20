@@ -228,7 +228,7 @@ If Eagle fell back to another port because `41595` was taken, set `"env": { "EAG
 
 Electron 22, which Eagle's compiled code is tied to, limits where items can be dragged:
 
-- **Wayland session:** dragging into Dolphin, Nautilus, PureRef and other native Wayland apps copies the original files (always a copy, never a move). Chromium 108 sends an empty `text/uri-list`, so Eagle patches it in memory at startup to send the file list. Kernels built with `CONFIG_PROC_MEM_NO_FORCE` refuse that patch; drags then carry only a link, which Dolphin and PureRef accept but Nautilus saves as a `.txt` file.
+- **Wayland session:** dragging into Dolphin, Nautilus, PureRef, Discord and other native Wayland apps copies the original files (always a copy, never a move). Chromium 108 sends an empty `text/uri-list` and offers a link beside the files, which apps like Discord take for a link drag; Eagle patches both in memory at startup so a drag offers only the file list, as a file manager does. Kernels built with `CONFIG_PROC_MEM_NO_FORCE` refuse that patch; drags then carry only a link, which Dolphin and PureRef accept but Nautilus saves as a `.txt` file.
 - **Wine apps (Clip Studio Paint, Paint Tool SAI, ...)** need `text/uri-list`; without the patch above they refuse drops from Eagle. Drag the file from a file manager instead.
 - **XWayland (`--ozone-platform=x11`) on Plasma:** drops onto Wayland apps are refused; KWin does not bridge Electron 22's X11 drags.
 

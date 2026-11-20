@@ -307,9 +307,8 @@ const ELECTRON_22_3_7_URI_LIST = {
   prologue: '554889e54157415653504989f74989fe',
   // The instruction after its `if (HasFile()) return false;`
   afterHasFileCheck: 0x6459069,
-  // int3 padding up to the next page after BoringSSL's assembly
-  cave: 0x1ec24c0,
-  caveSize: 0x1ec3000 - 0x1ec24c0
+  // int3 padding after BoringSSL's assembly
+  stubAt: 0x1ec24c0
 };
 
 function rel32(from, to) {
@@ -318,48 +317,107 @@ function rel32(from, to) {
   return buf;
 }
 
+function readCode(base, addr, length) {
+  const fd = fs.openSync('/proc/self/mem', 'r');
+  try {
+    const buf = Buffer.alloc(length);
+    fs.readSync(fd, buf, 0, length, base + addr);
+    return buf;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+// Make the `call target` instruction at `call` call `stub` instead, written
+// into int3 padding at `stubAt`.
+function redirectCall(base, { call, target, stubAt, stub }) {
+  const patchedCall = Buffer.concat([Buffer.from([0xe8]), rel32(call + 5, stubAt)]);
+  const originalCall = Buffer.concat([Buffer.from([0xe8]), rel32(call + 5, target)]);
+  const currentCall = readCode(base, call, 5);
+  const currentStub = readCode(base, stubAt, stub.length);
+  if (currentCall.equals(patchedCall) && currentStub.equals(stub)) return null;
+  if (!currentCall.equals(originalCall)) return 'unexpected calling code';
+  if (!currentStub.every(b => b === 0xcc)) return 'code cave is not padding';
+
+  const fd = fs.openSync('/proc/self/mem', 'r+');
+  try {
+    // Stub first, then the call that jumps to it.
+    fs.writeSync(fd, stub, 0, stub.length, base + stubAt);
+    fs.writeSync(fd, patchedCall, 0, patchedCall.length, base + call);
+  } catch (err) {
+    return `kernel refused the write (${err.code || err.message})`;
+  } finally {
+    fs.closeSync(fd);
+  }
+  return readCode(base, call, 5).equals(patchedCall) ? null : 'write did not stick';
+}
+
 function exportFileUriList() {
   if (process.arch !== 'x64' || process.versions.electron !== '22.3.7') {
     return 'unsupported Electron build';
   }
   const base = executableBase();
   if (base === null) return 'executable mapping not found';
-
-  const { call, getString, prologue, afterHasFileCheck, cave, caveSize } =
-    ELECTRON_22_3_7_URI_LIST;
+  const { call, getString, prologue, afterHasFileCheck, stubAt } = ELECTRON_22_3_7_URI_LIST;
+  if (readCode(base, getString, prologue.length / 2).toString('hex') !== prologue) {
+    return 'unexpected GetString() code';
+  }
   const stub = Buffer.concat([
     Buffer.from(prologue, 'hex'),
     Buffer.from([0xe9]),
-    rel32(cave + prologue.length / 2 + 5, afterHasFileCheck)
+    rel32(stubAt + prologue.length / 2 + 5, afterHasFileCheck)
   ]);
-  const patchedCall = Buffer.concat([Buffer.from([0xe8]), rel32(call + 5, cave)]);
-  const originalCall = Buffer.concat([Buffer.from([0xe8]), rel32(call + 5, getString)]);
+  return redirectCall(base, { call, target: getString, stubAt, stub });
+}
 
-  const fd = fs.openSync('/proc/self/mem', 'r+');
-  const read = (addr, length) => {
-    const buf = Buffer.alloc(length);
-    fs.readSync(fd, buf, 0, length, base + addr);
-    return buf;
-  };
-  try {
-    const currentCall = read(call, 5);
-    if (currentCall.equals(patchedCall) && read(cave, stub.length).equals(stub)) return null;
-    if (!currentCall.equals(originalCall)) return 'unexpected ExtractData() code';
-    if (read(getString, prologue.length / 2).toString('hex') !== prologue) {
-      return 'unexpected GetString() code';
-    }
-    if (!read(cave, caveSize).every(b => b === 0xcc)) return 'code cave is not padding';
+// --------------------------------------------------------------------------
+// Offer dragged files the way a file manager does
+//
+// Besides text/uri-list, a drag carrying files offers text/x-moz-url (a link
+// to the first file) and text/plain (the URI list the renderer stored for
+// the patch above). Current Chromium drop targets turn either into a URL
+// beside the files, and apps such as Discord then treat the drop as a link
+// and ignore it. File managers offer only the URI list.
+//
+// BuildMimeTypesList() decides what to offer with HasURL() and HasString().
+// Point both calls at stubs that answer false whenever the drag holds files.
+// ExtractData() keeps its own HasString() call, so text/uri-list still
+// returns the URI list. Only applied together with the text/uri-list patch:
+// without it, the URL is the only way a drop target finds the files.
+// --------------------------------------------------------------------------
 
-    // Stub first, then the call that jumps to it.
-    fs.writeSync(fd, stub, 0, stub.length, base + cave);
-    fs.writeSync(fd, patchedCall, 0, patchedCall.length, base + call);
-    if (!read(call, 5).equals(patchedCall)) return 'write did not stick';
-    return null;
-  } catch (err) {
-    return `kernel refused the write (${err.code || err.message})`;
-  } finally {
-    fs.closeSync(fd);
+const ELECTRON_22_3_7_FILES_ONLY = {
+  // OSExchangeDataProviderNonBacked::HasFile(), folded with identical code
+  hasFile: 0x5234ba0,
+  // Calls in ui::WaylandExchangeDataProvider::BuildMimeTypesList()
+  calls: [
+    { call: 0x2ce764e, target: 0x64594d0 },  // HasURL()
+    { call: 0x2ce7820, target: 0x64594c0 }   // HasString()
+  ],
+  firstStubAt: ELECTRON_22_3_7_URI_LIST.stubAt + 0x20,
+  stubSpacing: 0x20
+};
+
+// A stub that returns false when the drag holds files, else calls `target`
+// with the original arguments.
+function falseForFilesStub(stubAt, hasFile, target) {
+  return Buffer.concat([
+    Buffer.from([0x57, 0x56, 0x52, 0xe8]), rel32(stubAt + 8, hasFile), // push %rdi, %rsi, %rdx; call HasFile
+    Buffer.from([0x5a, 0x5e, 0x5f, 0x84, 0xc0, 0x75, 0x05]),          // pop %rdx, %rsi, %rdi; test %al,%al; jnz files
+    Buffer.from([0xe9]), rel32(stubAt + 20, target),                    // jmp target
+    Buffer.from([0x31, 0xc0, 0xc3])                                     // files: xor %eax,%eax; ret
+  ]);
+}
+
+function offerFilesOnly() {
+  const base = executableBase();
+  const { hasFile, calls, firstStubAt, stubSpacing } = ELECTRON_22_3_7_FILES_ONLY;
+  for (const [i, { call, target }] of calls.entries()) {
+    const stubAt = firstStubAt + i * stubSpacing;
+    const skipped = redirectCall(base, { call, target, stubAt, stub: falseForFilesStub(stubAt, hasFile, target) });
+    if (skipped) return skipped;
   }
+  return null;
 }
 
 // --------------------------------------------------------------------------
@@ -428,6 +486,14 @@ if (usingWayland) {
     console.log('[STUBS WAYLAND] text/uri-list drag patch:', skipped ? `skipped (${skipped})` : 'applied');
   } catch (err) {
     console.error('[STUBS WAYLAND] text/uri-list drag patch failed:', err);
+  }
+  if (fileUriListExported) {
+    try {
+      const skipped = offerFilesOnly();
+      console.log('[STUBS WAYLAND] Files-only drag patch:', skipped ? `skipped (${skipped})` : 'applied');
+    } catch (err) {
+      console.error('[STUBS WAYLAND] Files-only drag patch failed:', err);
+    }
   }
   try {
     const skipped = keepSizeOnBareConfigure();
