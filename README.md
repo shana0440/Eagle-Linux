@@ -231,7 +231,7 @@ Electron 22, which Eagle's compiled code is tied to, limits where items can be d
 - **Wine apps (Clip Studio Paint, Paint Tool SAI, ...)** need `text/uri-list`; without the patch above they refuse drops from Eagle. Drag the file from a file manager instead.
 - **XWayland (`--ozone-platform=x11`) on Plasma:** drops onto Wayland apps are refused; KWin does not bridge Electron 22's X11 drags.
 
-Running natively on Wayland also needs two workarounds for Chromium 108 cursor bugs, applied automatically at startup: single-frame copies of your cursor theme (in `~/.cache/eagle-linux/static-cursors`) and keeping replaced cursor themes in memory. Without them Eagle segfaults in `WaylandCursor::SetPlatformShapeInternal()`, especially with animated cursor themes or monitors at different scales.
+Running natively on Wayland also needs two workarounds for Chromium 108 cursor bugs, applied automatically at startup: single-frame copies of your cursor theme (in `~/.cache/eagle-linux/static-cursors`) and keeping replaced cursor themes in memory. Without them Eagle segfaults in `WaylandCursor::SetPlatformShapeInternal()`, especially with animated cursor themes or monitors at different scales. Video playback also decodes into shared memory instead of GPU buffers there, which otherwise turn videos nearly black (seen on NVIDIA).
 
 Another startup patch keeps Eagle at its size when the compositor ends a configure sequence without a size, as Hyprland does when you switch back to Eagle's workspace. Without it Chromium 108 shrinks the window to its minimum size, drawn in the corner of its tile.
 

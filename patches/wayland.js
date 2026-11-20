@@ -474,6 +474,9 @@ let fileUriListExported = false;
 if (usingWayland) {
   // Renderers inherit the environment and use it to pick the drag path.
   process.env.EAGLE_LINUX_WAYLAND = '1';
+  // Videos decoded into GPU memory buffers come out nearly black with wrong
+  // colors on Wayland (seen on NVIDIA); decode into shared memory instead.
+  require('electron').app.commandLine.appendSwitch('disable-gpu-memory-buffer-video-frames');
   try {
     const skipped = keepCursorThemesAlive();
     console.log('[STUBS WAYLAND] Cursor theme free patch:', skipped ? `skipped (${skipped})` : 'applied');
