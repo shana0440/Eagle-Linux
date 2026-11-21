@@ -17878,8 +17878,9 @@ function initAPIServer () {
         const { JsonRestServer } = require(appRoot + '/my_modules/json-rest-light');
         APIServer = new JsonRestServer({ port: API_PORT });
 
-        function getAPIFolders () {
+        function getAPIFolders (params) {
             return new Promise((resolve, reject) => {
+                const folders = targetLibrary(params?.libraryPath).folders;
 
                 function cloneFolderList (newTree, tree, extraInfo) {
                     var arr;
@@ -17920,10 +17921,10 @@ function initAPIServer () {
                     }
                 }
 
-                if ($bodyScope.folders) {
+                if (folders) {
 
                     let clone = [];
-                    cloneFolderList(clone, $bodyScope.folders, false);
+                    cloneFolderList(clone, folders, false);
                     eagle.utils.tree.walk(clone, 'children', function(folder, parent) {
                         if (folder.password && !folder.isUnLock) {
                             folder.children = [];
@@ -18266,11 +18267,11 @@ function initAPIServer () {
         }
 
 
-        // Where an import lands: the open library, or the one `libraryPath` names.
-        function importTarget (libraryPath) {
+        // The open library, or the one `libraryPath` names, read from disk.
+        function targetLibrary (libraryPath) {
             const root = libraryPath && path.normalize(libraryPath).replace(/[\\/]+$/, "");
             if (!root || root === $bodyScope.libraryPath) {
-                return { folderMappings: $bodyScope.folderMappings };
+                return { folders: $bodyScope.folders, folderMappings: $bodyScope.folderMappings };
             }
             let metadata;
             try {
@@ -18287,7 +18288,7 @@ function initAPIServer () {
             eagle.utils.tree.walk(metadata.folders ?? [], 'children', function (folder) {
                 folderMappings[folder.id] = folder;
             });
-            return { library: root, folderMappings: folderMappings };
+            return { library: root, folders: metadata.folders ?? [], folderMappings: folderMappings };
         }
 
         function addPath (filePath, id, name, websiteUrl, tags, annotation, star, modificationTime, folderIds, cutMode, library) {
@@ -18352,7 +18353,7 @@ function initAPIServer () {
 
         function addItemFromPath (params) {
             return new Promise((resolve, reject) => {
-                var target = importTarget(params.libraryPath);
+                var target = targetLibrary(params.libraryPath);
                 var id = guid();
                 var filePath = params.path;
                 var cutMode = params.cutMode ?? false;
@@ -18394,7 +18395,7 @@ function initAPIServer () {
 
         function addItemFromPaths (params) {
             return new Promise((resolve, reject) => {
-                var target = importTarget(params.libraryPath);
+                var target = targetLibrary(params.libraryPath);
                 var filePaths = params.paths;
                 var cutMode = params.cutMode ?? false;
                 var items = params.items;
@@ -18478,7 +18479,7 @@ function initAPIServer () {
         
         function addBookmarkItem (params) {
             return new Promise((resolve, reject) => {
-                var target = importTarget(params.libraryPath);
+                var target = targetLibrary(params.libraryPath);
 
                 if (!params.url) reject();
                 // if (!params.base64) reject();
@@ -18542,7 +18543,7 @@ function initAPIServer () {
 
         function addItemFromURL (params) {
             return new Promise((resolve, reject) => {
-                var target = importTarget(params.libraryPath);
+                var target = targetLibrary(params.libraryPath);
                 if (!params.url) reject();
                 var url = params.url;
                 var name = params.name ?? guid();
@@ -18591,7 +18592,7 @@ function initAPIServer () {
 
         function addItemFromURLs (params) {
             return new Promise((resolve, reject) => {
-                var target = importTarget(params.libraryPath);
+                var target = targetLibrary(params.libraryPath);
                 var items = params.items;
                 if (!params.items) reject();
                 var folder;
