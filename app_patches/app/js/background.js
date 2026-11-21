@@ -158,10 +158,6 @@ function sendToBrowserImportLibrary (event, params) {
     const root = settings.getSync('browserImportLibrary');
     if (event.senderId !== 0 || !root || !fs.existsSync(path.join(root, 'metadata.json'))) return;
     params.library = root;
-    if (otherLibraryOf(params)) {
-        // The extension offers the open library's folders.
-        params.folders = [];
-    }
 }
 var openWithInfo = {};
 var forceQuit;

@@ -3,6 +3,16 @@ const http = require('http');
 
 const DEFAULT_PORT = 8080;
 
+// Eagle's browser extension calls from its background page: a browser
+// User-Agent with no Origin, or an extension Origin. Web pages send their own
+// Origin, Eagle's windows add Eagle/ to the User-Agent and scripts have theirs.
+function isBrowserExtension(request) {
+    const userAgent = request.headers['user-agent'] ?? '';
+    const origin = request.headers.origin;
+    return userAgent.startsWith('Mozilla/') && !userAgent.includes('Eagle/')
+        && (!origin || /^[a-z-]+-extension:\/\//.test(origin));
+}
+
 /**
  * Json HTTP Server
  */
@@ -47,6 +57,12 @@ class JsonRestServer extends JsonServerProc {
      */
     addAPI(api, method, callback, options) {
         return super.addAPI(api, method, callback, options);
+    }
+
+    // Handlers get a second argument that says who called.
+    _callAPI(fn, request) {
+        const caller = { browserExtension: isBrowserExtension(request) };
+        return super._callAPI((args) => fn(args, caller), request);
     }
 
     /**

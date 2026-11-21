@@ -17878,9 +17878,9 @@ function initAPIServer () {
         const { JsonRestServer } = require(appRoot + '/my_modules/json-rest-light');
         APIServer = new JsonRestServer({ port: API_PORT });
 
-        function getAPIFolders (params) {
+        function getAPIFolders (params, caller) {
             return new Promise((resolve, reject) => {
-                const folders = targetLibrary(params?.libraryPath).folders;
+                const folders = targetLibrary(params, caller).folders;
 
                 function cloneFolderList (newTree, tree, extraInfo) {
                     var arr;
@@ -17958,8 +17958,14 @@ function initAPIServer () {
             });
         }
 
-        function getAPIMetadataInfo () {
+        function getAPIMetadataInfo (params, caller) {
             return new Promise((resolve, reject) => {
+                const target = targetLibrary(params, caller);
+                if (target.library) {
+                    const name = path.basename(target.library).replace('.library', '');
+                    resolve({ ...target.metadata, library: { path: target.library, name: name } });
+                    return;
+                }
                 if (decodeURI($bodyScope.rootDir)) {
                     try {
                         var metadataPath = `${decodeURI($bodyScope.rootDir)}/metadata.json`;
@@ -18001,11 +18007,17 @@ function initAPIServer () {
             });
         }
 
-        function switchLibrary (params) {
+        function switchLibrary (params, caller) {
             return new Promise((resolve, reject) => {
                 var libraryPath = params.libraryPath;
                 if (!libraryPath || !fs.existsSync(libraryPath)) {
                     reject(`Library does not exist.`);
+                }
+                // While a browser-clips library is picked, the extension's own
+                // library switcher picks that library instead of switching Eagle.
+                else if (caller?.browserExtension && browserImportLibrary()) {
+                    electronSettings.setSync('browserImportLibrary', path.normalize(libraryPath).replace(/[\\/]+$/, ""));
+                    resolve();
                 }
                 else {
                     $bodyScope.openLibrary(path.normalize(libraryPath));
@@ -18157,8 +18169,15 @@ function initAPIServer () {
             });
         }
 
-        function getRecentFolders () {
+        function getRecentFolders (params, caller) {
             return new Promise((resolve, reject) => {
+                const target = targetLibrary(params, caller);
+                if (target.library) {
+                    const recentIds = JSON.parse(localStorage.getItem("recentMoveFolders") || "[]");
+                    const recent = [...recentIds.map((id) => target.folderMappings[id]), ...Object.values(target.folderMappings)];
+                    resolve([...new Set(recent.filter(Boolean))].slice(0, 16));
+                    return;
+                }
                 var recentFolders = $bodyScope.getRecentFoldersForAPI(16);
                 if (recentFolders.length < 16) {
                     for (var i = 0; i < $bodyScope.folderList.length; i++) {
@@ -18175,12 +18194,22 @@ function initAPIServer () {
             });
         }
 
-        function createFolder (params) {
+        function createFolder (params, caller) {
             return new Promise((resolve, reject) => {
+                const target = targetLibrary(params, caller);
                 var folderName = params.folderName;
                 var parent = params.parent;
                 if (!folderName) {
                     reject(`Missing required parameters.`);
+                }
+                else if (target.library) {
+                    const folder = { id: guid(), name: folderName, description: "", children: [], modificationTime: Date.now(), tags: [], password: "", passwordTips: "" };
+                    (target.folderMappings[parent]?.children ?? target.folders).push(folder);
+                    target.metadata.modificationTime = Date.now();
+                    fs.writeFileSync(path.join(target.library, "metadata.json"), JSON.stringify(target.metadata));
+                    $bodyScope.addToRecentFolders([folder.id]);
+                    electronLog.info(`[api] create folder: ${folderName}(${folder.id}) in ${target.library}`);
+                    resolve(folder);
                 }
                 else {
                     var folder = {
@@ -18267,8 +18296,10 @@ function initAPIServer () {
         }
 
 
-        // The open library, or the one `libraryPath` names, read from disk.
-        function targetLibrary (libraryPath) {
+        // The library a request works on: the one `libraryPath` names, the
+        // browser-clips library for the browser extension, or the open one.
+        function targetLibrary (params, caller) {
+            const libraryPath = params?.libraryPath ?? (caller?.browserExtension ? browserImportLibrary() : undefined);
             const root = libraryPath && path.normalize(libraryPath).replace(/[\\/]+$/, "");
             if (!root || root === $bodyScope.libraryPath) {
                 return { folders: $bodyScope.folders, folderMappings: $bodyScope.folderMappings };
@@ -18284,11 +18315,18 @@ function initAPIServer () {
             if (metadata.applicationVersion && require('compare-versions')(appVersion, metadata.applicationVersion) === -1) {
                 throw `Library needs a newer version of Eagle.`;
             }
+            metadata.folders = metadata.folders ?? [];
             const folderMappings = {};
-            eagle.utils.tree.walk(metadata.folders ?? [], 'children', function (folder) {
+            eagle.utils.tree.walk(metadata.folders, 'children', function (folder) {
                 folderMappings[folder.id] = folder;
             });
-            return { library: root, folders: metadata.folders ?? [], folderMappings: folderMappings };
+            return { library: root, metadata: metadata, folders: metadata.folders, folderMappings: folderMappings };
+        }
+
+        // The library picked with Save Browser Clips Here, if it still exists.
+        function browserImportLibrary () {
+            const root = electronSettings.getSync('browserImportLibrary');
+            return root && fs.existsSync(path.join(root, 'metadata.json')) ? root : undefined;
         }
 
         function addPath (filePath, id, name, websiteUrl, tags, annotation, star, modificationTime, folderIds, cutMode, library) {
@@ -18351,9 +18389,9 @@ function initAPIServer () {
             }
         }
 
-        function addItemFromPath (params) {
+        function addItemFromPath (params, caller) {
             return new Promise((resolve, reject) => {
-                var target = targetLibrary(params.libraryPath);
+                var target = targetLibrary(params, caller);
                 var id = guid();
                 var filePath = params.path;
                 var cutMode = params.cutMode ?? false;
@@ -18393,9 +18431,9 @@ function initAPIServer () {
             });
         }
 
-        function addItemFromPaths (params) {
+        function addItemFromPaths (params, caller) {
             return new Promise((resolve, reject) => {
-                var target = targetLibrary(params.libraryPath);
+                var target = targetLibrary(params, caller);
                 var filePaths = params.paths;
                 var cutMode = params.cutMode ?? false;
                 var items = params.items;
@@ -18477,9 +18515,9 @@ function initAPIServer () {
             });
         }
         
-        function addBookmarkItem (params) {
+        function addBookmarkItem (params, caller) {
             return new Promise((resolve, reject) => {
-                var target = targetLibrary(params.libraryPath);
+                var target = targetLibrary(params, caller);
 
                 if (!params.url) reject();
                 // if (!params.base64) reject();
@@ -18541,9 +18579,9 @@ function initAPIServer () {
             });
         }
 
-        function addItemFromURL (params) {
+        function addItemFromURL (params, caller) {
             return new Promise((resolve, reject) => {
-                var target = targetLibrary(params.libraryPath);
+                var target = targetLibrary(params, caller);
                 if (!params.url) reject();
                 var url = params.url;
                 var name = params.name ?? guid();
@@ -18590,9 +18628,9 @@ function initAPIServer () {
             });
         }
 
-        function addItemFromURLs (params) {
+        function addItemFromURLs (params, caller) {
             return new Promise((resolve, reject) => {
-                var target = targetLibrary(params.libraryPath);
+                var target = targetLibrary(params, caller);
                 var items = params.items;
                 if (!params.items) reject();
                 var folder;
