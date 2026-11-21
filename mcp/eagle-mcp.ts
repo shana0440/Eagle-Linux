@@ -26,6 +26,7 @@ const text = (description: string): JsonSchema => ({ type: "string", description
 const number = (description: string): JsonSchema => ({ type: "number", description });
 const texts = (description: string): JsonSchema => ({ type: "array", items: { type: "string" }, description });
 const star = number("Rating from 0 to 5");
+const libraryPath = text("Path to a .library directory to use instead of the open library");
 
 const itemFields: Record<string, JsonSchema> = {
   name: text("Item name"),
@@ -34,6 +35,7 @@ const itemFields: Record<string, JsonSchema> = {
   tags: texts("Tags to add"),
   star,
   folderId: text("Folder to put the item in"),
+  libraryPath,
 };
 
 const tools: Tool[] = [
@@ -44,7 +46,10 @@ const tools: Tool[] = [
     name: "switch_library", description: "Open another library.", method: "POST", path: "/api/library/switch",
     properties: { libraryPath: text("Path to a .library directory") }, required: ["libraryPath"],
   },
-  { name: "list_folders", description: "List every folder in the open library as a tree.", method: "GET", path: "/api/folder/list", readOnly: true },
+  {
+    name: "list_folders", description: "List every folder in a library as a tree.", method: "GET", path: "/api/folder/list", readOnly: true,
+    properties: { libraryPath },
+  },
   { name: "list_recent_folders", description: "List recently used folders.", method: "GET", path: "/api/folder/listRecent", readOnly: true },
   {
     name: "create_folder", description: "Create a folder, optionally inside another one.", method: "POST", path: "/api/folder/create",
@@ -98,7 +103,7 @@ const tools: Tool[] = [
   },
   {
     name: "add_bookmark", description: "Save a web page as a bookmark item.", method: "POST", path: "/api/item/addBookmark",
-    properties: { url: text("Page URL"), name: text("Bookmark name"), tags: texts("Tags to add"), star, folderId: text("Folder to put the bookmark in") },
+    properties: { url: text("Page URL"), name: text("Bookmark name"), tags: texts("Tags to add"), star, folderId: text("Folder to put the bookmark in"), libraryPath },
     required: ["url"],
   },
   {
