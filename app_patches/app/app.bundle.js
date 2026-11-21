@@ -60702,6 +60702,11 @@ EagleApp.directive('libraryPanel', function($timeout, $rootScope) {
                 IPCHelper.send('update-preferences');
             }
 
+            // Saves from the browser extension go to this library instead of the open one.
+            function isBrowserImportLibrary (item) {
+                return electronSettings.getSync('browserImportLibrary') === path.normalize(item.path);
+            }
+
             $scope.openSubmenu = function ($event, item) {
                 
                 $event && $event.stopPropagation();
@@ -60783,6 +60788,19 @@ EagleApp.directive('libraryPanel', function($timeout, $rootScope) {
                             }
                         },
                         {
+                            label: "Save Browser Clips Here",
+                            icon: 'ic-import-links.svg',
+                            checked: isBrowserImportLibrary(item),
+                            click: () => {
+                                if (isBrowserImportLibrary(item)) {
+                                    electronSettings.deleteSync('browserImportLibrary');
+                                }
+                                else {
+                                    electronSettings.setSync('browserImportLibrary', path.normalize(item.path));
+                                }
+                            }
+                        },
+                        {
                             role: 'separator'
                         },
                         {
@@ -60799,6 +60817,9 @@ EagleApp.directive('libraryPanel', function($timeout, $rootScope) {
                                 var idx = $scope.listItems.indexOf(item);
                                 $scope.listItems.splice(idx, 1);
                                 $scope.unpinLibrary(undefined, item);
+                                if (isBrowserImportLibrary(item)) {
+                                    electronSettings.deleteSync('browserImportLibrary');
+                                }
                                 updateLibraryHistory();
                                 $scope.$evalAsync();
                             }

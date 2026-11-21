@@ -151,6 +151,18 @@ function imagesDirOf (item) {
     const root = otherLibraryOf(item);
     return root ? path.normalize(root + "/images/") : library.imagesDir;
 }
+
+// Saves from the browser extension reach this window from the main process
+// (senderId 0) and go to the library picked for them in the library switcher.
+function sendToBrowserImportLibrary (event, params) {
+    const root = settings.getSync('browserImportLibrary');
+    if (event.senderId !== 0 || !root || !fs.existsSync(path.join(root, 'metadata.json'))) return;
+    params.library = root;
+    if (otherLibraryOf(params)) {
+        // The extension offers the open library's folders.
+        params.folders = [];
+    }
+}
 var openWithInfo = {};
 var forceQuit;
 
@@ -741,6 +753,7 @@ ipcRenderer.on('resume-metadata-queue', () => {
 });
 
 ipcRenderer.on('screencapture-from-extension', function(event, file) {
+    sendToBrowserImportLibrary(event, file);
     uploadBse64Image(file, function (base64) {
         if (preferences.notification.notification.enable !== 'false' && preferences.notification.notification.when.extension != 'false') {
             ipcRenderer.send('notification', {
@@ -782,6 +795,7 @@ process.on('uncaughtException', function (err) {
 });
 
 ipcRenderer.on('upload-from-extension', function(event, params) {
+    sendToBrowserImportLibrary(event, params);
 
     var source = tokenSource();
     taskTokens.push(source);
@@ -798,7 +812,7 @@ ipcRenderer.on('upload-from-extension', function(event, params) {
         });
         if (result) {
             var name = sanitize(encodeURIComponent(params.name).replace(/\(/g, "\\(").replace(/%/g, "").replace(/\)/g, "\\)")).trim();
-            var imagesDir = library.imagesDir;
+            var imagesDir = imagesDirOf(params);
             if( process.platform == 'darwin' ) { imagesDir = encodeURI(imagesDir); }
             else { imagesDir = encodeURI(imagesDir.replace(/\\/g, "/"));}
             // console.log(imagesDir);
@@ -822,6 +836,7 @@ ipcRenderer.on('upload-from-extension', function(event, params) {
 });
 
 ipcRenderer.on('url-from-extension', async function(event, params) {
+    sendToBrowserImportLibrary(event, params);
 
     var source = tokenSource();
     taskTokens.push(source);
