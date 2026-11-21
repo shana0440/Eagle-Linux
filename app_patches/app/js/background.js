@@ -139,6 +139,18 @@ var importItemDateMap = {};
 var metadataQueueImagesMapping = {};        // 用来避免连续修改图片，重复的写入操作，这此采用分身表的方式处理
 var lastModifiedTimeMappings = {};
 var taskTokens = [];
+
+// An import may name a library other than the open one in `item.library`.
+function otherLibraryOf (item) {
+    if (!item.library) return undefined;
+    const root = path.normalize(item.library).replace(/[\\/]+$/, "");
+    return root === library.rootDir ? undefined : root;
+}
+
+function imagesDirOf (item) {
+    const root = otherLibraryOf(item);
+    return root ? path.normalize(root + "/images/") : library.imagesDir;
+}
 var openWithInfo = {};
 var forceQuit;
 
@@ -902,6 +914,7 @@ function uploadFileQueue (files, index, cancellationToken) {
 
         if (file.cutMode) image.cutMode = true;
         if (file.merged) image.merged = true;
+        if (file.library) image.library = file.library;
 
         addToProcessQueue(image);
     });
@@ -5932,7 +5945,7 @@ function initAllQueue () {
 
             if (task.cancellationToken.isCancelled()) {
                 try {
-                    let dir = library.imagesDir + task.image.id + ".info/";
+                    let dir = imagesDirOf(task.image) + task.image.id + ".info/";
                     if (fs.existsSync(dir)) { fse.remove(dir); }
                 } catch (err) {
                     console.error(err);
@@ -5949,7 +5962,7 @@ function initAllQueue () {
         processImage(task.image, function (errorObj, image) {
 
             var imageId = task.image.id;
-            var dir = library.imagesDir + imageId + ".info/";
+            var dir = imagesDirOf(task.image) + imageId + ".info/";
 
             if (task.cancellationToken.isCancelled()) {
                 if (fs.existsSync(dir)) { fse.remove(dir); }
@@ -5975,6 +5988,10 @@ function initAllQueue () {
                 // 如果無法產生縮圖，嘗試使用 icon 模式添加
                 if (image && image.ext && fs.existsSync(path.resolve(dir + image.name + "." + image.ext))) {
                     image.noPreview = true;
+                    if (otherLibraryOf(task.image)) {
+                        addToOtherLibrary(otherLibraryOf(task.image), image);
+                        return returnCallback(undefined, image);
+                    }
                     onImagesChange([image], true);
                     ipcRenderer.send('file-uploaded-end', image);
                     ipcRenderer.send('electron-info', `[bg] >> add with icon-only mode`);
@@ -6107,7 +6124,7 @@ async function processImage (file, callback, cancellationToken) {
         var thumbnailSize = 480;
         var filePath = file.path;
         var id = file.id;
-        var dir = library.imagesDir + id + ".info/";
+        var dir = imagesDirOf(file) + id + ".info/";
         var name, rawPath, width, height, thumbnailPath;
         var originPath = file.path;
         var item;
@@ -6181,7 +6198,7 @@ async function processImage (file, callback, cancellationToken) {
         }
 
         file.name = sanitize(file.name.replace("." + ext, "")).trim();
-        file.name = file.name.substr(0, remainingFilenameLength(library.rootDir));
+        file.name = file.name.substr(0, remainingFilenameLength(otherLibraryOf(file) ?? library.rootDir));
         file.name = unrom.nfc(file.name);
 
         // 避免文件名称是空格键
@@ -6270,6 +6287,11 @@ async function processImage (file, callback, cancellationToken) {
                     startAt: item.startAt ?? item.thumbnailAt
                 });
 				delete item.noPreview;
+                if (otherLibraryOf(file)) {
+                    const palettePath = item.noThumbnail && !item.removeThumbnail ? rawPath : thumbnailPath;
+                    await addToOtherLibrary(otherLibraryOf(file), item, palettePath);
+                    return returnCallback(undefined, item);
+                }
                 item.processingPalette = true;
 				if (item.noThumbnail && !item.removeThumbnail) {
 					ColorAnalyzer.addTask(item, thumbnailSize, rawPath);
@@ -6286,6 +6308,10 @@ async function processImage (file, callback, cancellationToken) {
                 clearTimeout(timer);
 				// 無法添加文件一律使用 icon 模式添加
 				item.noPreview = true;
+				if (otherLibraryOf(file)) {
+					await addToOtherLibrary(otherLibraryOf(file), item);
+					return returnCallback(undefined, item);
+				}
 				onImagesChange([item], true);
 				returnCallback(undefined, item);
 
@@ -6310,6 +6336,47 @@ async function processImage (file, callback, cancellationToken) {
         } catch (err) {}
         return returnCallback({ err: err, msg: msg, path: filePath });
     }
+}
+
+// Finishes an item for a library that is not open, as the palette and metadata
+// queues would for the open one. The library loads it the next time it opens,
+// and the mtime.json entry lets an Eagle that has it open elsewhere notice it.
+async function addToOtherLibrary (root, item, palettePath) {
+    try {
+        if (palettePath) {
+            item.palettes = await readPalettes(palettePath);
+            if (item.removeThumbnail && palettePath.endsWith("_thumbnail.png")) {
+                fse.removeSync(palettePath);
+            }
+        }
+        normalizeProperities(item);
+        removeUnusedProperities(item);
+        item.lastModified = Date.now();
+        await fs.promises.writeFile(path.normalize(`${root}/images/${item.id}.info/metadata.json`), JSON.stringify(item));
+
+        const mtimePath = path.normalize(`${root}/${MTIMENAME}`);
+        if (fs.existsSync(mtimePath)) {
+            const mtimes = JSON.parse(fs.readFileSync(mtimePath, 'utf8'));
+            if (!mtimes[item.id]) mtimes.all = (mtimes.all || 0) + 1;
+            mtimes[item.id] = item.lastModified;
+            fs.writeFileSync(mtimePath, JSON.stringify(mtimes));
+        }
+        ipcRenderer.send('electron-info', `[bg] >> Added to ${root}`);
+    }
+    catch (err) {
+        ipcRenderer.send('electron-log', `[bg] Can not add ${item.id} to ${root}: ${err.stack || err}`);
+    }
+    ipcRenderer.send('file-uploaded-end', {});
+}
+
+function readPalettes (imagePath) {
+    return new Promise((resolve) => {
+        const timer = setTimeout(resolve, 30000);
+        ColorAnalyzer.run(imagePath, (palettes) => {
+            clearTimeout(timer);
+            resolve(palettes);
+        });
+    });
 }
 
 // 在 Finder 查看文件（支持多选）

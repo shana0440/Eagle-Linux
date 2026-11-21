@@ -412,7 +412,7 @@ class Downloader {
                 cancellationToken: source.token
             }, (downloadedItem) => {
                 if (downloadedItem && downloadedItem.path) {
-                    addToProcessQueue(downloadedItem);
+                    addToProcessQueue({ ...downloadedItem, library: item.library });
                 }
                 else {
                     ipcRenderer.send('file-uploaded-end', {});

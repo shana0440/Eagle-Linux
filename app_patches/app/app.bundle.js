@@ -18266,7 +18266,31 @@ function initAPIServer () {
         }
 
 
-        function addPath (filePath, id, name, websiteUrl, tags, annotation, star, modificationTime, folderIds, cutMode) {
+        // Where an import lands: the open library, or the one `libraryPath` names.
+        function importTarget (libraryPath) {
+            const root = libraryPath && path.normalize(libraryPath).replace(/[\\/]+$/, "");
+            if (!root || root === $bodyScope.libraryPath) {
+                return { folderMappings: $bodyScope.folderMappings };
+            }
+            let metadata;
+            try {
+                metadata = JSON.parse(fs.readFileSync(path.join(root, "metadata.json"), "utf8"));
+            }
+            catch (err) {
+                throw `Library does not exist.`;
+            }
+            const appVersion = require(appRoot + '/package.json').version;
+            if (metadata.applicationVersion && require('compare-versions')(appVersion, metadata.applicationVersion) === -1) {
+                throw `Library needs a newer version of Eagle.`;
+            }
+            const folderMappings = {};
+            eagle.utils.tree.walk(metadata.folders ?? [], 'children', function (folder) {
+                folderMappings[folder.id] = folder;
+            });
+            return { library: root, folderMappings: folderMappings };
+        }
+
+        function addPath (filePath, id, name, websiteUrl, tags, annotation, star, modificationTime, folderIds, cutMode, library) {
             var fds = [];
             if (fs.statSync(filePath).isDirectory()) {
                 var dirFiles = walk(filePath);
@@ -18275,6 +18299,7 @@ function initAPIServer () {
                         fds.push({
                             name: path.basename(fpath),
                             path: fpath,
+                            library: library,
                         });
                     });
                 }
@@ -18291,12 +18316,13 @@ function initAPIServer () {
                     star: star ?? undefined,
                     path: filePath,
                     cutMode: cutMode ?? false,
+                    library: library,
                 }];
             }
             $bodyScope.uploadFiles(fds);
         }
 
-        function addURLs (imageUrls, names, websiteUrls, tags, annotations, stars, modificationTimes, headers, folderIds) {
+        function addURLs (imageUrls, names, websiteUrls, tags, annotations, stars, modificationTimes, headers, folderIds, target) {
             $bodyScope.uploadUrls(imageUrls, folderIds, { 
                 names: names,
                 urls: websiteUrls,
@@ -18305,10 +18331,15 @@ function initAPIServer () {
                 modificationTimes: modificationTimes,
                 annotations: annotations,
                 stars: stars,
+                library: target.library,
+                folderMappings: target.folderMappings,
             });
             imageUrls.forEach(function () {
                 $bodyScope.uploadQueue.push({});
             });
+
+            // Recent tags and folders belong to the open library.
+            if (target.library) return;
 
             if (tags && tags?.length > 0) {
                 $bodyScope.TagManager.addHistoryTags(tags);
@@ -18321,6 +18352,7 @@ function initAPIServer () {
 
         function addItemFromPath (params) {
             return new Promise((resolve, reject) => {
+                var target = importTarget(params.libraryPath);
                 var id = guid();
                 var filePath = params.path;
                 var cutMode = params.cutMode ?? false;
@@ -18334,13 +18366,13 @@ function initAPIServer () {
                 var folderId = params.folderId ?? params.folderID;
                 var folderIds = params.folderIds ?? params.folderIDs ?? [];
 
-                if (folderId && $bodyScope.folderMappings[folderId]) {
-                    folder = $bodyScope.folderMappings[folderId];
+                if (folderId && target.folderMappings[folderId]) {
+                    folder = target.folderMappings[folderId];
                     folderIds = [folder.id];
                 }
                 else if (folderIds && Array.isArray(folderIds)) {
                     folderIds = folderIds.filter((id) => {
-                        return $bodyScope.folderMappings[id];
+                        return target.folderMappings[id];
                     });
                 }
 
@@ -18355,13 +18387,14 @@ function initAPIServer () {
                 }
 
                 $bodyScope.showUploadQueue();
-                addPath(filePath, id, name, website, tags, annotation, star, modificationTime, folderIds, cutMode);
+                addPath(filePath, id, name, website, tags, annotation, star, modificationTime, folderIds, cutMode, target.library);
                 resolve(id);
             });
         }
 
         function addItemFromPaths (params) {
             return new Promise((resolve, reject) => {
+                var target = importTarget(params.libraryPath);
                 var filePaths = params.paths;
                 var cutMode = params.cutMode ?? false;
                 var items = params.items;
@@ -18370,13 +18403,13 @@ function initAPIServer () {
                 var folderId = params.folderId ?? params.folderID;
                 var folderIds = params.folderIds ?? params.folderIDs ?? [];
 
-                if (folderId && $bodyScope.folderMappings[folderId]) {
-                    folder = $bodyScope.folderMappings[folderId];
+                if (folderId && target.folderMappings[folderId]) {
+                    folder = target.folderMappings[folderId];
                     folderIds = [folder.id];
                 }
                 else if (folderIds && Array.isArray(folderIds)) {
                     folderIds = folderIds.filter((id) => {
-                        return $bodyScope.folderMappings[id];
+                        return target.folderMappings[id];
                     });
                 }
                 
@@ -18385,7 +18418,7 @@ function initAPIServer () {
                     filePaths.forEach(function (filePath) {
                         let id = guid();
                         ids.push(id);
-                        addPath(filePath, id, undefined, undefined, undefined, undefined, undefined, undefined, folderIds, cutMode);
+                        addPath(filePath, id, undefined, undefined, undefined, undefined, undefined, undefined, folderIds, cutMode, target.library);
                     });
                     $bodyScope.showUploadQueue();
                     resolve(ids);
@@ -18402,7 +18435,7 @@ function initAPIServer () {
                         var star = item.star;
                         var tags = item.tags ?? [];
                         var modificationTime = item.modificationTime;
-                        addPath(filePath, id, name, website, tags, annotation, star, modificationTime, folderIds);
+                        addPath(filePath, id, name, website, tags, annotation, star, modificationTime, folderIds, undefined, target.library);
                     });
                     $bodyScope.showUploadQueue();
                     resolve(ids);
@@ -18445,6 +18478,7 @@ function initAPIServer () {
         
         function addBookmarkItem (params) {
             return new Promise((resolve, reject) => {
+                var target = importTarget(params.libraryPath);
 
                 if (!params.url) reject();
                 // if (!params.base64) reject();
@@ -18457,8 +18491,8 @@ function initAPIServer () {
                 var modificationTime = params.modificationTime;
                 var folder;
                 var folderId = params.folderId ?? params.folderID;
-                if (folderId && $bodyScope.folderMappings[folderId]) {
-                    folder = $bodyScope.folderMappings[folderId];
+                if (folderId && target.folderMappings[folderId]) {
+                    folder = target.folderMappings[folderId];
                 }
                 var folderIds = params.folderIds ?? params.folderIDs ?? [];
                 name = name.substr(0, 128);
@@ -18475,6 +18509,7 @@ function initAPIServer () {
                     folders: [],
                     modificationTime: modificationTime ?? Date.now(),
                     base64: base64,
+                    library: target.library,
                 };
 
                 if (params.medium) data.medium = params.medium;
@@ -18484,7 +18519,7 @@ function initAPIServer () {
 
                 if (folderIds && Array.isArray(folderIds)) {
                     folderIds = folderIds.map((id) => {
-                        const folder = $bodyScope.folderMappings[id];
+                        const folder = target.folderMappings[id];
                         if (folder) {
                             return folder.id;
                         }
@@ -18507,6 +18542,7 @@ function initAPIServer () {
 
         function addItemFromURL (params) {
             return new Promise((resolve, reject) => {
+                var target = importTarget(params.libraryPath);
                 if (!params.url) reject();
                 var url = params.url;
                 var name = params.name ?? guid();
@@ -18519,13 +18555,13 @@ function initAPIServer () {
                 var folder;
                 var folderId = params.folderId ?? params.folderID;
                 var folderIds = params.folderIds ?? params.folderIDs ?? [];
-                if (folderId && $bodyScope.folderMappings[folderId]) {
-                    folder = $bodyScope.folderMappings[folderId];
+                if (folderId && target.folderMappings[folderId]) {
+                    folder = target.folderMappings[folderId];
                     folderIds = [folder.id];
                 }
                 else if (folderIds && Array.isArray(folderIds)) {
                     folderIds = folderIds.filter((id) => {
-                        return $bodyScope.folderMappings[id];
+                        return target.folderMappings[id];
                     });
                 }
                 name = name.substr(0, 128);
@@ -18537,7 +18573,7 @@ function initAPIServer () {
                 else {
                     electronLog.info(`[api] add base url: ${url.substr(0, 50)}...`);
                 }
-                addURLs([url], [name], [website], tags, [annotation], [star], [modificationTime], [headers], folderIds);
+                addURLs([url], [name], [website], tags, [annotation], [star], [modificationTime], [headers], folderIds, target);
 
                 if (params.notification) {
                     ipcRenderer.send('notification', {
@@ -18555,18 +18591,19 @@ function initAPIServer () {
 
         function addItemFromURLs (params) {
             return new Promise((resolve, reject) => {
+                var target = importTarget(params.libraryPath);
                 var items = params.items;
                 if (!params.items) reject();
                 var folder;
                 var folderId = params.folderId ?? params.folderID;
                 var folderIds = params.folderIds ?? params.folderIDs ?? [];
-                if (folderId && $bodyScope.folderMappings[folderId]) {
-                    folder = $bodyScope.folderMappings[folderId];
+                if (folderId && target.folderMappings[folderId]) {
+                    folder = target.folderMappings[folderId];
                     folderIds = [folder.id];
                 }
                 else if (folderIds && Array.isArray(folderIds)) {
                     folderIds = folderIds.filter((id) => {
-                        return $bodyScope.folderMappings[id];
+                        return target.folderMappings[id];
                     });
                 }
                 $bodyScope.showUploadQueue();
@@ -18587,7 +18624,7 @@ function initAPIServer () {
                     else {
                         electronLog.info(`[api] add base url: ${url.substr(0, 50)}...`);
                     }
-                    addURLs([url], [name], [website], tags, [annotation], [star], [modificationTime], [headers], folderIds);
+                    addURLs([url], [name], [website], tags, [annotation], [star], [modificationTime], [headers], folderIds, target);
                 });
                 resolve();
             });
@@ -30728,8 +30765,9 @@ EagleApp.controller('EagleController', ['$rootScope', '$scope', '$http', '$timeo
             let extendTags = [];
 
             if (fds && fds.length > 0) {
+                const folderMappings = params?.folderMappings ?? $scope.folderMappings;
                 folders = fds.map(function (fd) {
-                    return $scope.folderMappings[fd];
+                    return folderMappings[fd];
                 });
             }
 
@@ -30757,7 +30795,7 @@ EagleApp.controller('EagleController', ['$rootScope', '$scope', '$http', '$timeo
 
                 tags = [...new Set(tags)];
                 console.log(`before: ${fileName.length}`)
-                fileName = fileName.substr(0, remainingFilenameLength($scope.libraryPath));
+                fileName = fileName.substr(0, remainingFilenameLength(params?.library ?? $scope.libraryPath));
                 console.log(`after: ${fileName.length}`)
 
 				fileName = sanitize(fileName).replace(/%/g, "").replace(/&lt;/g,"").replace(/&gt;/g,"").trim();
@@ -30772,7 +30810,8 @@ EagleApp.controller('EagleController', ['$rootScope', '$scope', '$http', '$timeo
                     star: (params && params.stars && params.stars[index]) || undefined,
                     website: params && params.urls && params.urls[index] || "",
                     headers: params && params.headers && params.headers[index] || undefined,
-                    modificationTime: (params && params.modificationTimes && params.modificationTimes[index]) || Date.now() + index
+                    modificationTime: (params && params.modificationTimes && params.modificationTimes[index]) || Date.now() + index,
+                    library: params?.library
                 }
             });
             if (files.length > 0) {
@@ -30816,6 +30855,7 @@ EagleApp.controller('EagleController', ['$rootScope', '$scope', '$http', '$timeo
 
                 if (file.cutMode) image.cutMode = true;
                 if (file.merged) image.merged = true;
+                if (file.library) image.library = file.library;
 
                 images.push(image);
 
