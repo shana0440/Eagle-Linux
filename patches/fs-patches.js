@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { backgroundJsPath, PRISTINE_BACKGROUND_JS_SIZE } = require('./anti-tamper');
 
 const eagleStubsDir = path.resolve(__dirname, '..');
 
@@ -124,6 +125,10 @@ fs.statSync = function(p, opts) {
   if (typeof p === 'string' && p.includes('app.bundle.js')) {
     const stat = origFs.statSync.call(this, p, opts);
     return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, { size: 4408963 });
+  }
+  if (typeof p === 'string' && path.resolve(p) === backgroundJsPath) {
+    const stat = origFs.statSync.call(this, p, opts);
+    return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, { size: PRISTINE_BACKGROUND_JS_SIZE });
   }
   if (isHostPath(p) || isDllPath(p)) return dummyStat;
   return origFs.statSync.apply(this, arguments);

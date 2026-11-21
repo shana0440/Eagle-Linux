@@ -1,5 +1,7 @@
 const Module = require('module');
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 
 // MD5 Hash mapping to pass anti-tamper verification.
 //
@@ -25,6 +27,16 @@ const md5Hashes = {
   // check sees an unrecognised digest.
   'eb6b221347d45ef572b4b9e501c9c4f0': '479b7f739abd467eba6c33da0d6a6fd8'
 };
+
+// Eagle refuses to start when background.js does not match its pristine 4.1.0
+// digest, so whatever app_patches/ ships is mapped to that digest at startup.
+const PRISTINE_BACKGROUND_JS_MD5 = '4dded3b9f67eacee725adc09acb28542';
+const PRISTINE_BACKGROUND_JS_SIZE = 253563;
+const backgroundJsPath = path.join(__dirname, '..', 'app', 'app', 'js', 'background.js');
+try {
+  const shippedMd5 = crypto.createHash('md5').update(fs.readFileSync(backgroundJsPath)).digest('hex');
+  md5Hashes[shippedMd5] = PRISTINE_BACKGROUND_JS_MD5;
+} catch (e) {}
 
 function patchCryptoObject(targetCrypto) {
   if (!targetCrypto || targetCrypto.__eagleMd5Patched) return targetCrypto;
@@ -87,5 +99,7 @@ Module._load = function(request, parent, isMain) {
 
 module.exports = {
   md5Hashes,
-  patchCryptoObject
+  patchCryptoObject,
+  backgroundJsPath,
+  PRISTINE_BACKGROUND_JS_SIZE
 };

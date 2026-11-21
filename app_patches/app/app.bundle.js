@@ -17878,8 +17878,9 @@ function initAPIServer () {
         const { JsonRestServer } = require(appRoot + '/my_modules/json-rest-light');
         APIServer = new JsonRestServer({ port: API_PORT });
 
-        function getAPIFolders () {
+        function getAPIFolders (params, caller) {
             return new Promise((resolve, reject) => {
+                const folders = targetLibrary(params, caller).folders;
 
                 function cloneFolderList (newTree, tree, extraInfo) {
                     var arr;
@@ -17920,10 +17921,10 @@ function initAPIServer () {
                     }
                 }
 
-                if ($bodyScope.folders) {
+                if (folders) {
 
                     let clone = [];
-                    cloneFolderList(clone, $bodyScope.folders, false);
+                    cloneFolderList(clone, folders, false);
                     eagle.utils.tree.walk(clone, 'children', function(folder, parent) {
                         if (folder.password && !folder.isUnLock) {
                             folder.children = [];
@@ -17957,8 +17958,14 @@ function initAPIServer () {
             });
         }
 
-        function getAPIMetadataInfo () {
+        function getAPIMetadataInfo (params, caller) {
             return new Promise((resolve, reject) => {
+                const target = targetLibrary(params, caller);
+                if (target.library) {
+                    const name = path.basename(target.library).replace('.library', '');
+                    resolve({ ...target.metadata, library: { path: target.library, name: name } });
+                    return;
+                }
                 if (decodeURI($bodyScope.rootDir)) {
                     try {
                         var metadataPath = `${decodeURI($bodyScope.rootDir)}/metadata.json`;
@@ -18000,11 +18007,17 @@ function initAPIServer () {
             });
         }
 
-        function switchLibrary (params) {
+        function switchLibrary (params, caller) {
             return new Promise((resolve, reject) => {
                 var libraryPath = params.libraryPath;
                 if (!libraryPath || !fs.existsSync(libraryPath)) {
                     reject(`Library does not exist.`);
+                }
+                // While a browser-clips library is picked, the extension's own
+                // library switcher picks that library instead of switching Eagle.
+                else if (caller?.browserExtension && browserImportLibrary()) {
+                    electronSettings.setSync('browserImportLibrary', path.normalize(libraryPath).replace(/[\\/]+$/, ""));
+                    resolve();
                 }
                 else {
                     $bodyScope.openLibrary(path.normalize(libraryPath));
@@ -18156,8 +18169,15 @@ function initAPIServer () {
             });
         }
 
-        function getRecentFolders () {
+        function getRecentFolders (params, caller) {
             return new Promise((resolve, reject) => {
+                const target = targetLibrary(params, caller);
+                if (target.library) {
+                    const recentIds = JSON.parse(localStorage.getItem("recentMoveFolders") || "[]");
+                    const recent = [...recentIds.map((id) => target.folderMappings[id]), ...Object.values(target.folderMappings)];
+                    resolve([...new Set(recent.filter(Boolean))].slice(0, 16));
+                    return;
+                }
                 var recentFolders = $bodyScope.getRecentFoldersForAPI(16);
                 if (recentFolders.length < 16) {
                     for (var i = 0; i < $bodyScope.folderList.length; i++) {
@@ -18174,12 +18194,22 @@ function initAPIServer () {
             });
         }
 
-        function createFolder (params) {
+        function createFolder (params, caller) {
             return new Promise((resolve, reject) => {
+                const target = targetLibrary(params, caller);
                 var folderName = params.folderName;
                 var parent = params.parent;
                 if (!folderName) {
                     reject(`Missing required parameters.`);
+                }
+                else if (target.library) {
+                    const folder = { id: guid(), name: folderName, description: "", children: [], modificationTime: Date.now(), tags: [], password: "", passwordTips: "" };
+                    (target.folderMappings[parent]?.children ?? target.folders).push(folder);
+                    target.metadata.modificationTime = Date.now();
+                    fs.writeFileSync(path.join(target.library, "metadata.json"), JSON.stringify(target.metadata));
+                    $bodyScope.addToRecentFolders([folder.id]);
+                    electronLog.info(`[api] create folder: ${folderName}(${folder.id}) in ${target.library}`);
+                    resolve(folder);
                 }
                 else {
                     var folder = {
@@ -18266,7 +18296,40 @@ function initAPIServer () {
         }
 
 
-        function addPath (filePath, id, name, websiteUrl, tags, annotation, star, modificationTime, folderIds, cutMode) {
+        // The library a request works on: the one `libraryPath` names, the
+        // browser-clips library for the browser extension, or the open one.
+        function targetLibrary (params, caller) {
+            const libraryPath = params?.libraryPath ?? (caller?.browserExtension ? browserImportLibrary() : undefined);
+            const root = libraryPath && path.normalize(libraryPath).replace(/[\\/]+$/, "");
+            if (!root || root === $bodyScope.libraryPath) {
+                return { folders: $bodyScope.folders, folderMappings: $bodyScope.folderMappings };
+            }
+            let metadata;
+            try {
+                metadata = JSON.parse(fs.readFileSync(path.join(root, "metadata.json"), "utf8"));
+            }
+            catch (err) {
+                throw `Library does not exist.`;
+            }
+            const appVersion = require(appRoot + '/package.json').version;
+            if (metadata.applicationVersion && require('compare-versions')(appVersion, metadata.applicationVersion) === -1) {
+                throw `Library needs a newer version of Eagle.`;
+            }
+            metadata.folders = metadata.folders ?? [];
+            const folderMappings = {};
+            eagle.utils.tree.walk(metadata.folders, 'children', function (folder) {
+                folderMappings[folder.id] = folder;
+            });
+            return { library: root, metadata: metadata, folders: metadata.folders, folderMappings: folderMappings };
+        }
+
+        // The library picked with Save Browser Clips Here, if it still exists.
+        function browserImportLibrary () {
+            const root = electronSettings.getSync('browserImportLibrary');
+            return root && fs.existsSync(path.join(root, 'metadata.json')) ? root : undefined;
+        }
+
+        function addPath (filePath, id, name, websiteUrl, tags, annotation, star, modificationTime, folderIds, cutMode, library) {
             var fds = [];
             if (fs.statSync(filePath).isDirectory()) {
                 var dirFiles = walk(filePath);
@@ -18275,6 +18338,7 @@ function initAPIServer () {
                         fds.push({
                             name: path.basename(fpath),
                             path: fpath,
+                            library: library,
                         });
                     });
                 }
@@ -18291,12 +18355,13 @@ function initAPIServer () {
                     star: star ?? undefined,
                     path: filePath,
                     cutMode: cutMode ?? false,
+                    library: library,
                 }];
             }
             $bodyScope.uploadFiles(fds);
         }
 
-        function addURLs (imageUrls, names, websiteUrls, tags, annotations, stars, modificationTimes, headers, folderIds) {
+        function addURLs (imageUrls, names, websiteUrls, tags, annotations, stars, modificationTimes, headers, folderIds, target) {
             $bodyScope.uploadUrls(imageUrls, folderIds, { 
                 names: names,
                 urls: websiteUrls,
@@ -18305,10 +18370,15 @@ function initAPIServer () {
                 modificationTimes: modificationTimes,
                 annotations: annotations,
                 stars: stars,
+                library: target.library,
+                folderMappings: target.folderMappings,
             });
             imageUrls.forEach(function () {
                 $bodyScope.uploadQueue.push({});
             });
+
+            // Recent tags and folders belong to the open library.
+            if (target.library) return;
 
             if (tags && tags?.length > 0) {
                 $bodyScope.TagManager.addHistoryTags(tags);
@@ -18319,8 +18389,9 @@ function initAPIServer () {
             }
         }
 
-        function addItemFromPath (params) {
+        function addItemFromPath (params, caller) {
             return new Promise((resolve, reject) => {
+                var target = targetLibrary(params, caller);
                 var id = guid();
                 var filePath = params.path;
                 var cutMode = params.cutMode ?? false;
@@ -18334,13 +18405,13 @@ function initAPIServer () {
                 var folderId = params.folderId ?? params.folderID;
                 var folderIds = params.folderIds ?? params.folderIDs ?? [];
 
-                if (folderId && $bodyScope.folderMappings[folderId]) {
-                    folder = $bodyScope.folderMappings[folderId];
+                if (folderId && target.folderMappings[folderId]) {
+                    folder = target.folderMappings[folderId];
                     folderIds = [folder.id];
                 }
                 else if (folderIds && Array.isArray(folderIds)) {
                     folderIds = folderIds.filter((id) => {
-                        return $bodyScope.folderMappings[id];
+                        return target.folderMappings[id];
                     });
                 }
 
@@ -18355,13 +18426,14 @@ function initAPIServer () {
                 }
 
                 $bodyScope.showUploadQueue();
-                addPath(filePath, id, name, website, tags, annotation, star, modificationTime, folderIds, cutMode);
+                addPath(filePath, id, name, website, tags, annotation, star, modificationTime, folderIds, cutMode, target.library);
                 resolve(id);
             });
         }
 
-        function addItemFromPaths (params) {
+        function addItemFromPaths (params, caller) {
             return new Promise((resolve, reject) => {
+                var target = targetLibrary(params, caller);
                 var filePaths = params.paths;
                 var cutMode = params.cutMode ?? false;
                 var items = params.items;
@@ -18370,13 +18442,13 @@ function initAPIServer () {
                 var folderId = params.folderId ?? params.folderID;
                 var folderIds = params.folderIds ?? params.folderIDs ?? [];
 
-                if (folderId && $bodyScope.folderMappings[folderId]) {
-                    folder = $bodyScope.folderMappings[folderId];
+                if (folderId && target.folderMappings[folderId]) {
+                    folder = target.folderMappings[folderId];
                     folderIds = [folder.id];
                 }
                 else if (folderIds && Array.isArray(folderIds)) {
                     folderIds = folderIds.filter((id) => {
-                        return $bodyScope.folderMappings[id];
+                        return target.folderMappings[id];
                     });
                 }
                 
@@ -18385,7 +18457,7 @@ function initAPIServer () {
                     filePaths.forEach(function (filePath) {
                         let id = guid();
                         ids.push(id);
-                        addPath(filePath, id, undefined, undefined, undefined, undefined, undefined, undefined, folderIds, cutMode);
+                        addPath(filePath, id, undefined, undefined, undefined, undefined, undefined, undefined, folderIds, cutMode, target.library);
                     });
                     $bodyScope.showUploadQueue();
                     resolve(ids);
@@ -18402,7 +18474,7 @@ function initAPIServer () {
                         var star = item.star;
                         var tags = item.tags ?? [];
                         var modificationTime = item.modificationTime;
-                        addPath(filePath, id, name, website, tags, annotation, star, modificationTime, folderIds);
+                        addPath(filePath, id, name, website, tags, annotation, star, modificationTime, folderIds, undefined, target.library);
                     });
                     $bodyScope.showUploadQueue();
                     resolve(ids);
@@ -18443,8 +18515,9 @@ function initAPIServer () {
             });
         }
         
-        function addBookmarkItem (params) {
+        function addBookmarkItem (params, caller) {
             return new Promise((resolve, reject) => {
+                var target = targetLibrary(params, caller);
 
                 if (!params.url) reject();
                 // if (!params.base64) reject();
@@ -18457,8 +18530,8 @@ function initAPIServer () {
                 var modificationTime = params.modificationTime;
                 var folder;
                 var folderId = params.folderId ?? params.folderID;
-                if (folderId && $bodyScope.folderMappings[folderId]) {
-                    folder = $bodyScope.folderMappings[folderId];
+                if (folderId && target.folderMappings[folderId]) {
+                    folder = target.folderMappings[folderId];
                 }
                 var folderIds = params.folderIds ?? params.folderIDs ?? [];
                 name = name.substr(0, 128);
@@ -18475,6 +18548,7 @@ function initAPIServer () {
                     folders: [],
                     modificationTime: modificationTime ?? Date.now(),
                     base64: base64,
+                    library: target.library,
                 };
 
                 if (params.medium) data.medium = params.medium;
@@ -18484,7 +18558,7 @@ function initAPIServer () {
 
                 if (folderIds && Array.isArray(folderIds)) {
                     folderIds = folderIds.map((id) => {
-                        const folder = $bodyScope.folderMappings[id];
+                        const folder = target.folderMappings[id];
                         if (folder) {
                             return folder.id;
                         }
@@ -18505,8 +18579,9 @@ function initAPIServer () {
             });
         }
 
-        function addItemFromURL (params) {
+        function addItemFromURL (params, caller) {
             return new Promise((resolve, reject) => {
+                var target = targetLibrary(params, caller);
                 if (!params.url) reject();
                 var url = params.url;
                 var name = params.name ?? guid();
@@ -18519,13 +18594,13 @@ function initAPIServer () {
                 var folder;
                 var folderId = params.folderId ?? params.folderID;
                 var folderIds = params.folderIds ?? params.folderIDs ?? [];
-                if (folderId && $bodyScope.folderMappings[folderId]) {
-                    folder = $bodyScope.folderMappings[folderId];
+                if (folderId && target.folderMappings[folderId]) {
+                    folder = target.folderMappings[folderId];
                     folderIds = [folder.id];
                 }
                 else if (folderIds && Array.isArray(folderIds)) {
                     folderIds = folderIds.filter((id) => {
-                        return $bodyScope.folderMappings[id];
+                        return target.folderMappings[id];
                     });
                 }
                 name = name.substr(0, 128);
@@ -18537,7 +18612,7 @@ function initAPIServer () {
                 else {
                     electronLog.info(`[api] add base url: ${url.substr(0, 50)}...`);
                 }
-                addURLs([url], [name], [website], tags, [annotation], [star], [modificationTime], [headers], folderIds);
+                addURLs([url], [name], [website], tags, [annotation], [star], [modificationTime], [headers], folderIds, target);
 
                 if (params.notification) {
                     ipcRenderer.send('notification', {
@@ -18553,20 +18628,21 @@ function initAPIServer () {
             });
         }
 
-        function addItemFromURLs (params) {
+        function addItemFromURLs (params, caller) {
             return new Promise((resolve, reject) => {
+                var target = targetLibrary(params, caller);
                 var items = params.items;
                 if (!params.items) reject();
                 var folder;
                 var folderId = params.folderId ?? params.folderID;
                 var folderIds = params.folderIds ?? params.folderIDs ?? [];
-                if (folderId && $bodyScope.folderMappings[folderId]) {
-                    folder = $bodyScope.folderMappings[folderId];
+                if (folderId && target.folderMappings[folderId]) {
+                    folder = target.folderMappings[folderId];
                     folderIds = [folder.id];
                 }
                 else if (folderIds && Array.isArray(folderIds)) {
                     folderIds = folderIds.filter((id) => {
-                        return $bodyScope.folderMappings[id];
+                        return target.folderMappings[id];
                     });
                 }
                 $bodyScope.showUploadQueue();
@@ -18587,7 +18663,7 @@ function initAPIServer () {
                     else {
                         electronLog.info(`[api] add base url: ${url.substr(0, 50)}...`);
                     }
-                    addURLs([url], [name], [website], tags, [annotation], [star], [modificationTime], [headers], folderIds);
+                    addURLs([url], [name], [website], tags, [annotation], [star], [modificationTime], [headers], folderIds, target);
                 });
                 resolve();
             });
@@ -30728,8 +30804,9 @@ EagleApp.controller('EagleController', ['$rootScope', '$scope', '$http', '$timeo
             let extendTags = [];
 
             if (fds && fds.length > 0) {
+                const folderMappings = params?.folderMappings ?? $scope.folderMappings;
                 folders = fds.map(function (fd) {
-                    return $scope.folderMappings[fd];
+                    return folderMappings[fd];
                 });
             }
 
@@ -30757,7 +30834,7 @@ EagleApp.controller('EagleController', ['$rootScope', '$scope', '$http', '$timeo
 
                 tags = [...new Set(tags)];
                 console.log(`before: ${fileName.length}`)
-                fileName = fileName.substr(0, remainingFilenameLength($scope.libraryPath));
+                fileName = fileName.substr(0, remainingFilenameLength(params?.library ?? $scope.libraryPath));
                 console.log(`after: ${fileName.length}`)
 
 				fileName = sanitize(fileName).replace(/%/g, "").replace(/&lt;/g,"").replace(/&gt;/g,"").trim();
@@ -30772,7 +30849,8 @@ EagleApp.controller('EagleController', ['$rootScope', '$scope', '$http', '$timeo
                     star: (params && params.stars && params.stars[index]) || undefined,
                     website: params && params.urls && params.urls[index] || "",
                     headers: params && params.headers && params.headers[index] || undefined,
-                    modificationTime: (params && params.modificationTimes && params.modificationTimes[index]) || Date.now() + index
+                    modificationTime: (params && params.modificationTimes && params.modificationTimes[index]) || Date.now() + index,
+                    library: params?.library
                 }
             });
             if (files.length > 0) {
@@ -30816,6 +30894,7 @@ EagleApp.controller('EagleController', ['$rootScope', '$scope', '$http', '$timeo
 
                 if (file.cutMode) image.cutMode = true;
                 if (file.merged) image.merged = true;
+                if (file.library) image.library = file.library;
 
                 images.push(image);
 
@@ -60661,6 +60740,11 @@ EagleApp.directive('libraryPanel', function($timeout, $rootScope) {
                 IPCHelper.send('update-preferences');
             }
 
+            // Saves from the browser extension go to this library instead of the open one.
+            function isBrowserImportLibrary (item) {
+                return electronSettings.getSync('browserImportLibrary') === path.normalize(item.path);
+            }
+
             $scope.openSubmenu = function ($event, item) {
                 
                 $event && $event.stopPropagation();
@@ -60742,6 +60826,19 @@ EagleApp.directive('libraryPanel', function($timeout, $rootScope) {
                             }
                         },
                         {
+                            label: "Save Browser Clips Here",
+                            icon: 'ic-import-links.svg',
+                            checked: isBrowserImportLibrary(item),
+                            click: () => {
+                                if (isBrowserImportLibrary(item)) {
+                                    electronSettings.deleteSync('browserImportLibrary');
+                                }
+                                else {
+                                    electronSettings.setSync('browserImportLibrary', path.normalize(item.path));
+                                }
+                            }
+                        },
+                        {
                             role: 'separator'
                         },
                         {
@@ -60758,6 +60855,9 @@ EagleApp.directive('libraryPanel', function($timeout, $rootScope) {
                                 var idx = $scope.listItems.indexOf(item);
                                 $scope.listItems.splice(idx, 1);
                                 $scope.unpinLibrary(undefined, item);
+                                if (isBrowserImportLibrary(item)) {
+                                    electronSettings.deleteSync('browserImportLibrary');
+                                }
                                 updateLibraryHistory();
                                 $scope.$evalAsync();
                             }
