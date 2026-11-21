@@ -221,7 +221,7 @@ If Eagle fell back to another port because `41595` was taken, set `"env": { "EAG
 | **macOS (Darwin) Support**      | ✅ Included | Unified Nix derivation supporting `aarch64-darwin` and `x86_64-darwin`     |
 | **Copy / Paste Files**          | ✅ Included | Ctrl+C puts items on the clipboard as `text/uri-list`; files copied in a file manager paste into Eagle |
 | **Native Wayland**              | ✅ Included | `--ozone-platform-hint=auto` in every launcher; pass `--ozone-platform=x11` to force XWayland |
-| **Import Into Any Library**     | ✅ Included | The local API's `addFromPath(s)`, `addFromURL(s)`, `addBookmark` and `folder/list` take an optional `libraryPath`; items land in that library with thumbnails and colors even when it is not open, and show up the next time it is. **Save Browser Clips Here** in a library's `…` menu in the library switcher sends browser-extension saves there too, and the extension's save window then shows that library and its folders |
+| **Import Into Any Library**     | ✅ Included | The local API's `addFromPath(s)`, `addFromURL(s)`, `addBookmark`, `item/info` and `folder/list` take an optional `libraryPath`; items land in that library with thumbnails and colors even when it is not open, and show up the next time it is. **Save Browser Clips Here** in a library's `…` menu in the library switcher sends browser-extension saves there too, and the extension's save window then shows that library and its folders |
 | **Drag Items Out**              | ⚠️ Partial | See below                                                                  |
 
 ### Dragging items out of Eagle

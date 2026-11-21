@@ -18759,16 +18759,58 @@ function initAPIServer () {
             });
         }
 
-        function getItemInfo (params) {
-            return new Promise((resolve, reject) => {
-                var id = params.id;
-                if (id && $bodyScope.itemMappings[id]) {
-                    resolve($bodyScope.itemMappings[id]);
+        async function getItemInfo (params) {
+            const id = params.id;
+            const target = targetLibrary(params);
+            if (!target.library) {
+                if (id && $bodyScope.itemMappings?.[id]) return $bodyScope.itemMappings[id];
+                throw `File does not exist.`;
+            }
+
+            if (typeof id !== 'string' || !/^(?:[a-z0-9_-]{13}|[a-z0-9_-]{36})$/i.test(id)) {
+                throw `Invalid item ID.`;
+            }
+            const itemDir = path.join(target.library, 'images', `${id}.info`);
+            const metadataPath = path.join(itemDir, 'metadata.json');
+            let rawMetadata;
+            try {
+                if (!(await fs.promises.lstat(itemDir)).isDirectory() ||
+                    !(await fs.promises.lstat(metadataPath)).isFile()) {
+                    throw `File does not exist.`;
                 }
-                else {
-                    reject(`File does not exist.`);
+                rawMetadata = await fs.promises.readFile(metadataPath, 'utf8');
+            }
+            catch (err) {
+                if (err.code === 'ENOENT' || err.code === 'ENOTDIR') throw `File does not exist.`;
+                throw err;
+            }
+
+            let item;
+            try {
+                item = JSON.parse(rawMetadata);
+            }
+            catch {
+                throw `Item metadata is incomplete or invalid.`;
+            }
+            if (item?.id !== id || typeof item.name !== 'string' || !item.name ||
+                typeof item.ext !== 'string' || !item.ext || /[\\/\0]/.test(item.name + item.ext)) {
+                throw `Item metadata is incomplete or invalid.`;
+            }
+
+            const originalPath = path.join(itemDir, `${item.name}.${item.ext}`);
+            if (originalPath === metadataPath) throw `Item original file does not exist.`;
+            try {
+                const original = await fs.promises.lstat(originalPath);
+                if (!original.isFile()) throw `Item original file does not exist.`;
+                if (Number.isFinite(item.size) && original.size !== item.size) {
+                    throw `Item original file size does not match its metadata.`;
                 }
-            });
+            }
+            catch (err) {
+                if (err.code === 'ENOENT' || err.code === 'ENOTDIR') throw `Item original file does not exist.`;
+                throw err;
+            }
+            return item;
         }
 
         function getItemThumb (params) {

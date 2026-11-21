@@ -81,8 +81,8 @@ const tools: Tool[] = [
     required: ["limit"],
   },
   {
-    name: "get_item", description: "Show one item's metadata.", method: "GET", path: "/api/item/info", readOnly: true,
-    properties: { id: text("Item ID") }, required: ["id"],
+    name: "get_item", description: "Look up an item by ID in the open library or a specified library.", method: "GET", path: "/api/item/info", readOnly: true,
+    properties: { id: text("Item ID"), libraryPath }, required: ["id"],
   },
   {
     name: "get_item_thumbnail_path", description: "Get the file path of an item's thumbnail.", method: "GET", path: "/api/item/thumbnail", readOnly: true,
